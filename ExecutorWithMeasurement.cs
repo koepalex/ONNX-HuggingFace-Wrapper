@@ -19,3 +19,18 @@ internal sealed class ExecutorWithMeasurement: IDisposable
         _logger.LogTrace($"Execution time: {_stopwatch.ElapsedMilliseconds} ms");
     }
 }
+
+internal sealed class ExecutorWithMeasurementFactory
+{
+    private readonly ILogger<ExecutorWithMeasurement> _logger;
+
+    public ExecutorWithMeasurementFactory(ILogger<ExecutorWithMeasurement> logger)
+    {
+        _logger = logger;
+    }
+
+    public ExecutorWithMeasurement CreateExecutor()
+    {
+        return new ExecutorWithMeasurement(_logger);
+    }
+}

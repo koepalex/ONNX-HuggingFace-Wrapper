@@ -1,0 +1,37 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": ".NET Core Launch (web) - Development",
+            "type": "coreclr",
+            // Configuration ommitted for brevity.
+            "env": {
+                "ASPNETCORE_ENVIRONMENT": "Development",
+                "ASPNETCORE_URLS": "https://localhost:5001",
+                "ASPNETCORE_DETAILEDERRORS": "1",
+                "ASPNETCORE_SHUTDOWNTIMEOUTSECONDS": "3"
+            },
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/Debug/net8.0/OnnxHuggingFaceWrapper.dll",
+            "preLaunchTask": "build-debug",
+        },
+        {
+            "name": ".NET Core Launch (web) - Production",
+            "type": "coreclr",
+            // Configuration ommitted for brevity.
+            "env": {
+                "ASPNETCORE_ENVIRONMENT": "Production",
+                "ASPNETCORE_URLS": "https://localhost:5001",
+                "ASPNETCORE_DETAILEDERRORS": "1",
+                "ASPNETCORE_SHUTDOWNTIMEOUTSECONDS": "3"
+            },
+            "request": "launch",
+            "program": "${workspaceFolder}/bin/Release/net8.0/OnnxHuggingFaceWrapper.dll",
+            "preLaunchTask": "build-release",
+        }
+
+    ]
+}

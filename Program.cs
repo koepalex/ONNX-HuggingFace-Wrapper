@@ -1,118 +1,167 @@
-﻿using System.Diagnostics;
-using System.Linq.Expressions;
+﻿namespace OnnxHuggingFaceWrapper;
 
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Logging.Console;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.Hosting;
 
 using Microsoft.ML.OnnxRuntimeGenAI;
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.AspNetCore.Mvc;
+using OnnxHuggingFaceWrapper.Models;
+using System.Net;
+using System.Net.Mime;
+using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Configuration;
+using OnnxHuggingFaceWrapper.Configuration;
 
-#region Services and Logging Configuration
-var serviceCollection = new ServiceCollection();
-ConfigureServices(serviceCollection);
-
-var serviceProvider = serviceCollection.BuildServiceProvider();
-var logger = serviceProvider.GetService<ILogger<Program>>()!;
-#endregion
-
-// relative paths seems not to work
-// best clone huggingface repo and use the path to the model
-// NOTE: install GIT LFS and activate it before cloning the repo
-string modelPath = @"C:\Users\alkopke\src\HF\Phi-3-mini-4k-instruct-onnx\cpu_and_mobile\cpu-int4-rtn-block-32";
-// start with complete output first
-const OutputType outputType = OutputType.Complete;
-
-// This will load `genai_config.json` get get details of the model
-using var model = new Model(modelPath);
-using var tokenizer = new Tokenizer(model);
-
-var cts = new CancellationTokenSource();
-
-Console.CancelKeyPress += (sender, e) =>
+internal sealed class Program : IDisposable
 {
-    e.Cancel = true;
-    cts.Cancel();
-};
+    // relative paths seems not to work
+    // best clone huggingface repo and use the path to the model
+    // NOTE: install GIT LFS and activate it before cloning the repo
+    //const string modelPath = @"C:\Users\alkopke\src\HF\Phi-3-mini-4k-instruct-onnx\cpu_and_mobile\cpu-int4-rtn-block-32";
+    //const string systemPrompt = "You are a helpful assistant. You are here to help me with my tasks.";
 
-var sw = new Stopwatch();
+    private readonly Model _model;
+    private readonly Tokenizer _tokenizer;
+    private readonly ILogger<Program> _logger;
+    private readonly ExecutorWithMeasurementFactory _executorFactory;
+    private readonly IOptions<AiModelSettings> _aiModelSettings;
 
-while(!cts.IsCancellationRequested)
-{
-    try
+
+    private static async Task Main(string[] args)
     {
-        logger.LogInformation("Please enter your question:");
-        string prompt = await Console.In.ReadLineAsync() ?? string.Empty;
+        var builder = WebApplication.CreateBuilder(args);
+        ConfigureConfiguration(builder.Configuration, builder.Environment, args);
+        ConfigureServices(builder.Services, builder.Configuration);
+        var app = builder.Build();
+        
+        using var program = app.Services.GetService<Program>()!;
 
+        app.UseExceptionHandler(errorApp =>
+            errorApp.Run(async context => 
+                await program.ErrorHandlingAsync(context))
+        );
+
+        // Define all Routes
+        app.MapPost("/v1/chat/completions/models/{modelName}", async (string modelName, TextGenerationRequest req)
+            => await program.GenerateTextAsync(modelName, req));
+
+        // start the WebAPI
+        await app.RunAsync();
+    }
+
+    public Program(ExecutorWithMeasurementFactory executorFactory, IOptions<AiModelSettings> aiModelSettings, ILogger<Program> logger)
+    {
+        _logger = logger;
+        _executorFactory = executorFactory;
+        _aiModelSettings = aiModelSettings;
+        // This will load `genai_config.json` get get details of the model
+        _model = new Model(aiModelSettings.Value.ModelPath);
+        _tokenizer = new Tokenizer(_model);
+
+    }
+
+    internal Task<TextGenerationResponse> GenerateTextAsync(string modelName, [FromBody] TextGenerationRequest request)
+    {
         // use <|system|> for grounding prompts
         var inputs = new string[] {
-            $"<|user|>\n{prompt}<|end|>\n<|assistant|>"
+            $"<|system|>\n{_aiModelSettings.Value.SystemPrompt}<|end|>",
+            $"<|user|>\n{request.Inputs}<|end|>",
+            "<|assistant|>"
         };
+        var inputSequences = _tokenizer.Encode(string.Join('\n', inputs));
 
-        var inputSequences = tokenizer.EncodeBatch(inputs);
+        using var generatorParams = new GeneratorParams(_model);
 
-        using var generatorParams =  new GeneratorParams(model);
+        request.Parameters?.TopK.Apply(x => generatorParams.SetSearchOption("top_k", x));
+        request.Parameters?.TopP.Apply(x => generatorParams.SetSearchOption("top_p", x));
+        request.Parameters?.Temperature.Apply(x => generatorParams.SetSearchOption("temperature", x), defaultValue: 0.7);
+        request.Parameters?.RepetitionPenalty.Apply(x => generatorParams.SetSearchOption("repetition_penalty", x));
+        // setting max_new_tokens or max_token depends on the model, setting max_length will work for all models
+        request.Parameters?.MaxNewTokens.Apply(x => generatorParams.SetSearchOption("max_length", x));
+        request.Parameters?.MaxTime.Apply(x => generatorParams.SetSearchOption("max_time", x));
+        request.Parameters?.ReturnFullText.Apply(x => generatorParams.SetSearchOption("return_full_text", x));
+        request.Parameters?.DoSample.Apply(x => generatorParams.SetSearchOption("do_sample", x));
+        request.Parameters?.Details.Apply(x => generatorParams.SetSearchOption("details", x));
+        //request.Parameters?.Stop.Apply(x => generatorParams.("stop", x));
+        request.Parameters?.TypicalP.Apply(x => generatorParams.SetSearchOption("typical_p", x));
+        request.Parameters?.BestOf.Apply(x => generatorParams.SetSearchOption("best_of", x));
+        request.Parameters?.DecoderInputDetails.Apply(x => generatorParams.SetSearchOption("decoder_input_details", x));
+        request.Parameters?.Watermark.Apply(x => generatorParams.SetSearchOption("watermark", x));
 
-        // TODO figure out which options are available
-        generatorParams.SetSearchOption("max_length", 200);
-        generatorParams.SetSearchOption("temperature", 0.6);
         generatorParams.SetInputSequences(inputSequences);
 
-
-        if (outputType == OutputType.Complete) 
+        string[] outputs;
+        if (request.Stream)
         {
-            Sequences outputSequences;
-            using (var measurement = serviceProvider.GetService<ExecutorWithMeasurement>())
-            {
-                outputSequences = model.Generate(generatorParams);
-            }
-
-            logger.LogInformation("Output:");
-            var outputs = tokenizer.DecodeBatch(outputSequences);
-            Array.ForEach(outputs, Console.WriteLine);
-        }
-        else if (outputType == OutputType.Streaming)
-        {
-            using var tokenizerStream = tokenizer.CreateStream();
-            using (var measurement = serviceProvider.GetService<ExecutorWithMeasurement>())
-            {
-                using var generator = new Generator(model, generatorParams);
-                while (!generator.IsDone())
-                {
-                    generator.ComputeLogits();
-                    Console.Write(tokenizerStream.Decode(generator.GetSequence(0)[^1]));
-                }
-            }
+            throw new Exception("Streaming not supported yet");
+            // using var tokenizerStream = tokenizer.CreateStream();
+            // using (var generator = new Generator(model, generatorParams))
+            // {
+            //     while (!generator.IsDone())
+            //     {
+            //         generator.ComputeLogits();
+            //         Console.Write(tokenizerStream.Decode(generator.GetSequence(0)[^1]));
+            //     }
+            // }
         }
         else
         {
-            logger.LogError("Invalid output type");
-            cts.Cancel();
+            Sequences outputSequences;
+            using (var measurement = _executorFactory.CreateExecutor())
+            {
+                outputSequences = _model.Generate(generatorParams);
+            }
+
+            outputs = _tokenizer.DecodeBatch(outputSequences);
         }
-    }
-    catch (Exception ex) when (ex is TaskCanceledException || ex is OperationCanceledException)
-    {
-        logger.LogError(ex.ToString());
-        cts.Cancel();
-    }
-}
 
-await Console.Out.WriteLineAsync("Exiting...");
+        return Task.FromResult(new TextGenerationResponse { GeneratedText = string.Join('\n', outputs) });
+    }
 
-static void ConfigureServices(IServiceCollection services)
-{
-    services.AddLogging(config =>
+    internal async Task ErrorHandlingAsync(HttpContext context)
     {
-        config.AddConsole(options =>
+        context.Response.StatusCode = Convert.ToInt32(HttpStatusCode.InternalServerError);
+        context.Response.ContentType = MediaTypeNames.Text.Plain;
+
+        var exceptionHandlerPathFeature = context.Features.Get<IExceptionHandlerPathFeature>();
+        var exception = exceptionHandlerPathFeature?.Error;
+
+        _logger.LogError(exception, "An unexpected error occurred.");
+
+        await context.Response.WriteAsync("An unexpected error occurred. Please try again later.");
+    }
+
+    private static void ConfigureConfiguration(IConfigurationManager configuration, IHostEnvironment environment, string[] args)
+    {
+        configuration
+            .AddCommandLine(args)
+            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+            .AddJsonFile($"appsettings.{environment.EnvironmentName}.json", optional: true, reloadOnChange: true)
+            .AddEnvironmentVariables();
+    }
+
+    private static void ConfigureServices(IServiceCollection services, IConfiguration configuration)
+    {
+        services.AddLogging(config =>
         {
-            //options..ColorBehavior = LoggerColorBehavior.Enabled;
+            config
+            .AddConsole()
+            .AddFilter(level => level >= LogLevel.Trace);
         })
-        .AddFilter(level => level >= LogLevel.Trace);
-    })
-    .AddTransient<ExecutorWithMeasurement>();
-}
+        .AddSingleton<ExecutorWithMeasurementFactory>()
+        .AddTransient<Program>();
+        
+        services.Configure<AiModelSettings>(options => configuration.GetSection("AiModelSettings").Bind(options));;
+    }
 
-public enum OutputType
-{
-    Complete = 0,
-    Streaming = 1,
+    public void Dispose()
+    {
+        _model?.Dispose();
+        _tokenizer?.Dispose();
+        _logger?.LogInformation("Exiting ...");
+    }
+
 }
