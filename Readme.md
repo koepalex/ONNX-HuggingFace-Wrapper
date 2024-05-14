@@ -26,6 +26,8 @@ The solution is designed for offline development and testing of applications tha
 
 ## Testing
 
+### TextGeneration
+
 Once the application is running, the API can be used for sending the complete output: 
 
 ```pwsh
@@ -44,6 +46,16 @@ curl https://localhost:5001/models/phi-3-mini `
     -d '{"inputs":"How to explain Internet for a medieval knight?","parameters":{"temperature":0.7}, "stream":true}' `
     -H 'Content-Type: application/json' `
     -k
+```
+
+### ChatCompletion
+
+```pwsh
+curl https://localhost:5001/v1/chat/completions `
+      -X POST `
+      -d '{"messages": [{"content": "How to explain Internet for a medieval knight?", "role": "user"}], "temperature":0.7, "stream":true}' `
+      -H 'Content-Type: application/json' `
+      -k
 ```
 
 ## Know Limitations

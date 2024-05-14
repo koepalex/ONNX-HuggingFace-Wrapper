@@ -4,7 +4,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.Hosting;
-
 using Microsoft.ML.OnnxRuntimeGenAI;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.AspNetCore.Mvc;
@@ -14,21 +13,17 @@ using System.Net.Mime;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Configuration;
 using OnnxHuggingFaceWrapper.Configuration;
+using System.Text;
+using System.Reflection;
 
 internal sealed class Program : IDisposable
 {
-    // relative paths seems not to work
-    // best clone huggingface repo and use the path to the model
-    // NOTE: install GIT LFS and activate it before cloning the repo
-    //const string modelPath = @"C:\Users\alkopke\src\HF\Phi-3-mini-4k-instruct-onnx\cpu_and_mobile\cpu-int4-rtn-block-32";
-    //const string systemPrompt = "You are a helpful assistant. You are here to help me with my tasks.";
-
     private readonly Model _model;
+    private readonly string _modelName;
     private readonly Tokenizer _tokenizer;
     private readonly ILogger<Program> _logger;
     private readonly ExecutorWithMeasurementFactory _executorFactory;
     private readonly IOptions<AiModelSettings> _aiModelSettings;
-
 
     private static async Task Main(string[] args)
     {
@@ -36,17 +31,19 @@ internal sealed class Program : IDisposable
         ConfigureConfiguration(builder.Configuration, builder.Environment, args);
         ConfigureServices(builder.Services, builder.Configuration);
         var app = builder.Build();
-        
+
         using var program = app.Services.GetService<Program>()!;
 
         app.UseExceptionHandler(errorApp =>
-            errorApp.Run(async context => 
+            errorApp.Run(async context =>
                 await program.ErrorHandlingAsync(context))
         );
 
         // Define all Routes
-        app.MapPost("/models/{modelName}", async (string modelName, TextGenerationRequest req)
-            => program.GenerateTextAsync(modelName, req));
+        app.MapPost("/models/{modelName}", async (string _, TextGenerationRequest req)
+            => program.GenerateTextAsync(req));
+        app.MapPost("/v1/chat/completions", async (ChatRequest req)
+            => program.ChatCompletionAsync(req));
 
         // start the WebAPI
         await app.RunAsync();
@@ -59,11 +56,84 @@ internal sealed class Program : IDisposable
         _aiModelSettings = aiModelSettings;
         // This will load `genai_config.json` get get details of the model
         _model = new Model(aiModelSettings.Value.ModelPath);
+        _modelName = Path.GetFileNameWithoutExtension(aiModelSettings.Value.ModelPath);
         _tokenizer = new Tokenizer(_model);
 
     }
 
-    internal async IAsyncEnumerable<TextGenerationResponse> GenerateTextAsync(string modelName, [FromBody] TextGenerationRequest request)
+    private async IAsyncEnumerable<ChatCompletionResponse> ChatCompletionAsync([FromBody] ChatRequest request)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"<|system|>\n{_aiModelSettings.Value.SystemPrompt}<|end|>");
+        request.Messages.ForEach(msg => sb.AppendLine($"<|{msg.Role}|>\n{msg.Content}<|end|>"));
+        sb.AppendLine("<|assistant|>");
+
+        var input = sb.ToString();
+        var inputSequences = _tokenizer.Encode(input);
+
+        using var generatorParams = new GeneratorParams(_model);
+        request.TopP.Apply(x => generatorParams.SetSearchOption("top_p", x));
+        request.Temperature.Apply(x => generatorParams.SetSearchOption("temperature", x), defaultValue: 0.7f);
+        request.MaxTokens.Apply(x => generatorParams.SetSearchOption("max_length", x));
+        request.N.Apply(x => generatorParams.SetSearchOption("n", x));
+        request.FrequencyPenalty.Apply(x => generatorParams.SetSearchOption("frequency_penalty", x));
+        request.PresencePenalty.Apply(x => generatorParams.SetSearchOption("presence_penalty", x));
+        request.Logprobs.Apply(x => generatorParams.SetSearchOption("logprobs", x));
+        //request.LogitBias.Apply(x => generatorParams.SetSearchOption("logit_bias", x));
+        //request.Stop.Apply(x => generatorParams.SetSearchOption("stop", x));
+        request.Seed.Apply(x => generatorParams.SetSearchOption("seed", x));
+        //request.ToolPrompt.Apply(x => generatorParams.SetSearchOption("tool_prompt", x));
+        //request.ToolChoice.Apply(x => generatorParams.SetSearchOption("tool_choice", x));
+        request.TopLogprobs.Apply(x => generatorParams.SetSearchOption("top_logprobs", x));
+        //request.Tools.Apply(x => generatorParams.SetSearchOption("tools", x));
+
+        generatorParams.SetInputSequences(inputSequences);
+
+        if (request.Stream)
+        {
+            using var tokenizerStream = _tokenizer.CreateStream();
+            using var generator = new Generator(_model, generatorParams);
+            int messageCounter = 0;
+            while (!generator.IsDone())
+            {
+                // run a task, to avoid blocking the sending thread
+                yield return await Task.Run(() =>
+                {
+                    generator.ComputeLogits();
+                    generator.GenerateNextToken();
+
+                    return new ChatCompletionResponse
+                    {
+                        Model = _modelName,
+                        Object = string.Join('\n', tokenizerStream.Decode(generator.GetSequence(0)[^1])),
+                        Created = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                        Id = messageCounter++.ToString(),
+                        SystemFingerprint = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0", // use as fingerprint the version of the assembly
+                    };
+                });
+            }
+        }
+        else
+        {
+            Sequences outputSequences;
+            using (var measurement = _executorFactory.CreateExecutor())
+            {
+                outputSequences = _model.Generate(generatorParams);
+            }
+
+            string[] outputs = _tokenizer.DecodeBatch(outputSequences);
+            yield return new ChatCompletionResponse
+            {
+                Model = _modelName,
+                Object = string.Join('\n', outputs),
+                Created = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+                Id = input.GetHashCode().ToString(),
+                SystemFingerprint = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0", // use as fingerprint the version of the assembly
+            };
+        }
+    }
+
+    private async IAsyncEnumerable<TextGenerationResponse> GenerateTextAsync([FromBody] TextGenerationRequest request)
     {
         // use <|system|> for grounding prompts
         var inputs = new string[] {
@@ -93,17 +163,19 @@ internal sealed class Program : IDisposable
 
         generatorParams.SetInputSequences(inputSequences);
 
-        string[] outputs;
         if (request.Stream)
         {
             using var tokenizerStream = _tokenizer.CreateStream();
             using var generator = new Generator(_model, generatorParams);
             while (!generator.IsDone())
             {
-                generator.ComputeLogits();
-                generator.GenerateNextToken();
-                
-                yield return new TextGenerationResponse { GeneratedText = tokenizerStream.Decode(generator.GetSequence(0)[^1]) };
+                yield return await Task.Run(() =>
+                {
+                    generator.ComputeLogits();
+                    generator.GenerateNextToken();
+
+                    return new TextGenerationResponse { GeneratedText = tokenizerStream.Decode(generator.GetSequence(0)[^1]) };
+                });
             }
         }
         else
@@ -114,10 +186,9 @@ internal sealed class Program : IDisposable
                 outputSequences = _model.Generate(generatorParams);
             }
 
-            outputs = _tokenizer.DecodeBatch(outputSequences);
+            string[] outputs = _tokenizer.DecodeBatch(outputSequences);
             yield return new TextGenerationResponse { GeneratedText = string.Join('\n', outputs) };
         }
-
     }
 
     internal async Task ErrorHandlingAsync(HttpContext context)
@@ -152,8 +223,8 @@ internal sealed class Program : IDisposable
         })
         .AddSingleton<ExecutorWithMeasurementFactory>()
         .AddTransient<Program>();
-        
-        services.Configure<AiModelSettings>(options => configuration.GetSection("AiModelSettings").Bind(options));;
+
+        services.Configure<AiModelSettings>(options => configuration.GetSection("AiModelSettings").Bind(options)); ;
     }
 
     public void Dispose()
