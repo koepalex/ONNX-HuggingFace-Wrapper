@@ -45,8 +45,8 @@ internal sealed class Program : IDisposable
         );
 
         // Define all Routes
-        app.MapPost("/v1/chat/completions/models/{modelName}", async (string modelName, TextGenerationRequest req)
-            => await program.GenerateTextAsync(modelName, req));
+        app.MapPost("/models/{modelName}", async (string modelName, TextGenerationRequest req)
+            => program.GenerateTextAsync(modelName, req));
 
         // start the WebAPI
         await app.RunAsync();
@@ -63,7 +63,7 @@ internal sealed class Program : IDisposable
 
     }
 
-    internal Task<TextGenerationResponse> GenerateTextAsync(string modelName, [FromBody] TextGenerationRequest request)
+    internal async IAsyncEnumerable<TextGenerationResponse> GenerateTextAsync(string modelName, [FromBody] TextGenerationRequest request)
     {
         // use <|system|> for grounding prompts
         var inputs = new string[] {
@@ -96,16 +96,15 @@ internal sealed class Program : IDisposable
         string[] outputs;
         if (request.Stream)
         {
-            throw new Exception("Streaming not supported yet");
-            // using var tokenizerStream = tokenizer.CreateStream();
-            // using (var generator = new Generator(model, generatorParams))
-            // {
-            //     while (!generator.IsDone())
-            //     {
-            //         generator.ComputeLogits();
-            //         Console.Write(tokenizerStream.Decode(generator.GetSequence(0)[^1]));
-            //     }
-            // }
+            using var tokenizerStream = _tokenizer.CreateStream();
+            using var generator = new Generator(_model, generatorParams);
+            while (!generator.IsDone())
+            {
+                generator.ComputeLogits();
+                generator.GenerateNextToken();
+                
+                yield return new TextGenerationResponse { GeneratedText = tokenizerStream.Decode(generator.GetSequence(0)[^1]) };
+            }
         }
         else
         {
@@ -116,9 +115,9 @@ internal sealed class Program : IDisposable
             }
 
             outputs = _tokenizer.DecodeBatch(outputSequences);
+            yield return new TextGenerationResponse { GeneratedText = string.Join('\n', outputs) };
         }
 
-        return Task.FromResult(new TextGenerationResponse { GeneratedText = string.Join('\n', outputs) });
     }
 
     internal async Task ErrorHandlingAsync(HttpContext context)

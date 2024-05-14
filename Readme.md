@@ -26,11 +26,22 @@ The solution is designed for offline development and testing of applications tha
 
 ## Testing
 
-Once the application is running, the API can be used by 
+Once the application is running, the API can be used for sending the complete output: 
+
 ```pwsh
-curl https://localhost:5001/v1/chat/completions/models/phi-3-mini `
+curl https://localhost:5001/models/phi-3-mini `
     -X POST `
     -d '{"inputs":"How to explain Internet for a medieval knight?","parameters":{"temperature":0.7}}' `
+    -H 'Content-Type: application/json' `
+    -k
+```
+
+or as streaming answer (word by word):
+
+```pwsh
+curl https://localhost:5001/models/phi-3-mini `
+    -X POST `
+    -d '{"inputs":"How to explain Internet for a medieval knight?","parameters":{"temperature":0.7}, "stream":true}' `
     -H 'Content-Type: application/json' `
     -k
 ```
@@ -40,6 +51,8 @@ curl https://localhost:5001/v1/chat/completions/models/phi-3-mini `
 * Currently only runs under windows, as the NuGet packages used not yet supporting Linux
 * The `modelName` (last part of the HTTP route) is ignored and it will always use the one model currently configured
 * HuggingFace TextGenerationAPI defines property `new_max_tokens` that seems not be supported by PHI-3, the value is passed to the model as `max_length`
+* HuggingFace TextGenerationAPI defined property `stop` that is used to configure stop words isn't possible to use, as GeneratorParams currently only support bool or double values
+* TextGenerationResponse don't fill out details only the `generated_text`
 
 # Design Decisions
 
