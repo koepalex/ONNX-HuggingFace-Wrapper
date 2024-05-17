@@ -19,4 +19,8 @@
     <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI.Managed" Version="0.2.0-rc6" />
   </ItemGroup>
 
+  <ItemGroup>
+     <InternalsVisibleTo Include="IntegrationTests" />
+  </ItemGroup>
+
 </Project>

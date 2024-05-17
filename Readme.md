@@ -21,7 +21,7 @@ The solution is designed for offline development and testing of applications tha
   * e.g. `git clone https://huggingface.co/CompVis/stable-diffusion-v1-4 -b onnx`
 * Download the tokenizer model you would like to use
   * e.g. `curl -# -O -L https://github.com/cassiebreviu/StableDiffusion/raw/main/StableDiffusion.ML.OnnxRuntime/cliptokenizer.onnx`
-* Edit [appsettings.json](appsettings.json) with 
+* Edit [appsettings.json](src/appsettings.json) with 
   * `SmallLanguageModelPath` - full path to the folder with the Onnx model you want to use
   * `SmallLanguageModelSystemPrompt` - system prompt to be used by the application
   * `TextEncoderModelPath` - full path to the Onnx model file for text encoding

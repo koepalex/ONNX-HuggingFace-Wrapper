@@ -14,7 +14,7 @@
                 "ASPNETCORE_SHUTDOWNTIMEOUTSECONDS": "3"
             },
             "request": "launch",
-            "program": "${workspaceFolder}/bin/Debug/net8.0/OnnxHuggingFaceWrapper.dll",
+            "program": "${workspaceFolder}/src/bin/Debug/net8.0/OnnxHuggingFaceWrapper.dll",
             "preLaunchTask": "build-debug",
         },
         {
@@ -27,7 +27,7 @@
                 "ASPNETCORE_SHUTDOWNTIMEOUTSECONDS": "3"
             },
             "request": "launch",
-            "program": "${workspaceFolder}/bin/Release/net8.0/OnnxHuggingFaceWrapper.dll",
+            "program": "${workspaceFolder}/src/bin/Release/net8.0/OnnxHuggingFaceWrapper.dll",
             "preLaunchTask": "build-release",
         }
 

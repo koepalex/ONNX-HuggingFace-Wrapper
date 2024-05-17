@@ -2,7 +2,7 @@ using System.Diagnostics;
 
 using Microsoft.Extensions.Logging;
 
-internal sealed class ExecutorWithMeasurement: IDisposable
+public sealed class ExecutorWithMeasurement: IDisposable
 {
     private static readonly Stopwatch _stopwatch = new Stopwatch();
     private readonly ILogger<ExecutorWithMeasurement> _logger;
@@ -20,7 +20,7 @@ internal sealed class ExecutorWithMeasurement: IDisposable
     }
 }
 
-internal sealed class ExecutorWithMeasurementFactory
+public sealed class ExecutorWithMeasurementFactory
 {
     private readonly ILogger<ExecutorWithMeasurement> _logger;
 

@@ -76,18 +76,18 @@ public class Message
 {
     [JsonPropertyName("content")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string Content { get; set; }
+    public string? Content { get; set; }
 
     [JsonPropertyName("name")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string Name { get; set; }
+    public string? Name { get; set; }
 
     [JsonPropertyName("role")]
-    public string Role { get; set; }
+    public string? Role { get; set; }
 
     [JsonPropertyName("tool_calls")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public List<ToolCall>? ToolCalls { get; set; }
+    public List<ChoiceToolCall>? ToolCalls { get; set; }
 }
 
 public class ToolType
@@ -109,7 +109,7 @@ public class Tool
     public string Type { get; set; }
 }
 
-public class ToolCall
+public class ChoiceToolCall
 {
     [JsonPropertyName("function")]
     public FunctionDefinition Function { get; set; }

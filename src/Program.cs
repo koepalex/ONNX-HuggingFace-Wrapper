@@ -18,7 +18,7 @@ using System.Reflection;
 using Microsoft.ML.OnnxRuntime;
 using Microsoft.ML.OnnxRuntime.Tensors;
 
-internal sealed class Program : IDisposable
+public sealed class Program : IDisposable
 {
     private readonly Model _languageModel;
     private readonly string _languageModelName;
@@ -47,7 +47,7 @@ internal sealed class Program : IDisposable
         app.MapPost("/models/{_}", async (string _, TextGenerationRequest req)
             => program.GenerateTextAsync(req));
         app.MapPost("/v1/chat/completions", async (ChatRequest req)
-            => program.ChatCompletionAsync(req));
+            => await program.ChatCompletionAsync(req));
         app.MapPost("/pipeline/feature-extraction/{_}", async (string _, TextEmbeddingRequest req)
             => program.ExtractTextEmbeddingsAsync(req));
 
@@ -64,7 +64,7 @@ internal sealed class Program : IDisposable
         if (!Path.Exists(aiModelSettings.Value.SmallLanguageModelPath))
         {
             _logger.LogError("Model file not found at {modelPath}", aiModelSettings.Value.SmallLanguageModelPath);
-            return;
+            Environment.FailFast("Model file not found");
         }
 
         // This will load `genai_config.json` get get details of the model
@@ -76,7 +76,7 @@ internal sealed class Program : IDisposable
         if (!File.Exists(aiModelSettings.Value.TextEncoderModelPath))
         {
             _logger.LogError("Model file not found at {modelPath}", aiModelSettings.Value.TextEncoderModelPath);
-            return;
+            Environment.FailFast("Model file not found");
         }
 
         // Microsoft.ML.OnnxRuntimeGenAI has currently no support for embeddings, so we use the original Microsoft.ML.OnnxRuntime
@@ -87,7 +87,7 @@ internal sealed class Program : IDisposable
         if (!File.Exists(aiModelSettings.Value.TokenizerModelPath))
         {
             _logger.LogError("Model file not found at {modelPath}", aiModelSettings.Value.TokenizerModelPath);
-            return;
+            Environment.FailFast("Model file not found");
         }
 
         // Load the tokenizer model
@@ -151,7 +151,7 @@ internal sealed class Program : IDisposable
         return lastHiddenStateTensor;
     }
 
-    private async IAsyncEnumerable<ChatCompletionResponse> ChatCompletionAsync([FromBody] ChatRequest request)
+    private async Task<ChatCompletionResponse> ChatCompletionAsync([FromBody] ChatRequest request)
     {
         var sb = new StringBuilder();
         sb.AppendLine($"<|system|>\n{_aiModelSettings.Value.SmallLanguageModelSystemPrompt}<|end|>");
@@ -179,32 +179,32 @@ internal sealed class Program : IDisposable
 
         generatorParams.SetInputSequences(inputSequences);
 
-        if (request.Stream)
-        {
-            using var tokenizerStream = _tokenizer.CreateStream();
-            using var generator = new Generator(_languageModel, generatorParams);
-            int messageCounter = 0;
-            while (!generator.IsDone())
-            {
-                // run a task, to avoid blocking the sending thread
-                yield return await Task.Run(() =>
-                {
-                    generator.ComputeLogits();
-                    generator.GenerateNextToken();
+        // if (request.Stream)
+        // {
+        //     // using var tokenizerStream = _tokenizer.CreateStream();
+        //     // using var generator = new Generator(_languageModel, generatorParams);
+        //     // int messageCounter = 0;
+        //     // while (!generator.IsDone())
+        //     // {
+        //     //     // run a task, to avoid blocking the sending thread
+        //     //     yield return await Task.Run(() =>
+        //     //     {
+        //     //         generator.ComputeLogits();
+        //     //         generator.GenerateNextToken();
 
-                    return new ChatCompletionResponse
-                    {
-                        Model = _languageModelName,
-                        Object = string.Join('\n', tokenizerStream.Decode(generator.GetSequence(0)[^1])),
-                        Created = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                        Id = messageCounter++.ToString(),
-                        SystemFingerprint = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0", // use as fingerprint the version of the assembly
-                    };
-                });
-            }
-        }
-        else
-        {
+        //     //         return new ChatCompletionResponse
+        //     //         {
+        //     //             Model = _languageModelName,
+        //     //             Object = string.Join('\n', tokenizerStream.Decode(generator.GetSequence(0)[^1])),
+        //     //             Created = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        //     //             Id = messageCounter++.ToString(),
+        //     //             SystemFingerprint = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0", // use as fingerprint the version of the assembly
+        //     //         };
+        //     //     });
+        //     // }
+        // }
+        // else
+        // {
             Sequences outputSequences;
             using (var measurement = _executorFactory.CreateExecutor())
             {
@@ -212,15 +212,29 @@ internal sealed class Program : IDisposable
             }
 
             string[] outputs = _tokenizer.DecodeBatch(outputSequences);
-            yield return new ChatCompletionResponse
+            return new ChatCompletionResponse
             {
                 Model = _languageModelName,
-                Object = string.Join('\n', outputs),
+                Object = null,
                 Created = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-                Id = input.GetHashCode().ToString(),
+                Id = $"id-{input.GetHashCode()}",
                 SystemFingerprint = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0", // use as fingerprint the version of the assembly
+                Choices = new List<ChatCompletionResponse.Choice> { 
+                    new ChatCompletionResponse.Choice { 
+                        FinishReason = "completed",
+                        Message = new ChatCompletionResponse.Message { 
+                            Content = string.Join('\n', outputs), 
+                            Role = "assistant", 
+                    },
+                    Index = 0 } },
+                Usage = new ChatCompletionResponse.CompletionUsage {
+                    CompletionTokens = outputs.Length,
+                    TotalTokens = outputs.Length,
+                    PromptTokens = input.Length,
+                },
+                
             };
-        }
+        //}
     }
 
     private async IAsyncEnumerable<TextGenerationResponse> GenerateTextAsync([FromBody] TextGenerationRequest request)
@@ -242,7 +256,7 @@ internal sealed class Program : IDisposable
         // setting max_new_tokens or max_token depends on the model, setting max_length will work for all models
         request.Parameters?.MaxNewTokens.Apply(x => generatorParams.SetSearchOption("max_length", x));
         request.Parameters?.MaxTime.Apply(x => generatorParams.SetSearchOption("max_time", x));
-        request.Parameters?.ReturnFullText.Apply(x => generatorParams.SetSearchOption("return_full_text", x));
+        //request.Parameters?.ReturnFullText.Apply(x => generatorParams.SetSearchOption("return_full_text", x));
         request.Parameters?.DoSample.Apply(x => generatorParams.SetSearchOption("do_sample", x));
         request.Parameters?.Details.Apply(x => generatorParams.SetSearchOption("details", x));
         //request.Parameters?.Stop.Apply(x => generatorParams.("stop", x));
@@ -296,10 +310,11 @@ internal sealed class Program : IDisposable
 
     private static void ConfigureConfiguration(IConfigurationManager configuration, IHostEnvironment environment, string[] args)
     {
+        var assemblyPath = Path.GetDirectoryName(Assembly.GetAssembly(typeof(Program)).Location);
         configuration
             .AddCommandLine(args)
-            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
-            .AddJsonFile($"appsettings.{environment.EnvironmentName}.json", optional: true, reloadOnChange: true)
+            .AddJsonFile(Path.Combine(assemblyPath, "appsettings.json"), optional: false, reloadOnChange: true)
+            .AddJsonFile(Path.Combine(assemblyPath, $"appsettings.{environment.EnvironmentName}.json"), optional: true, reloadOnChange: true)
             .AddEnvironmentVariables();
     }
 
