@@ -13,6 +13,8 @@
     <PackageReference Include="Microsoft.AspNetCore" Version="2.2.0" />
     <PackageReference Include="Microsoft.AspNetCore.Server.Kestrel" Version="2.2.0" />
     <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="8.0.0" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.17.3" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Extensions" Version="0.10.0" />
     <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI" Version="0.2.0-rc6" />
     <PackageReference Include="Microsoft.ML.OnnxRuntimeGenAI.Managed" Version="0.2.0-rc6" />
   </ItemGroup>

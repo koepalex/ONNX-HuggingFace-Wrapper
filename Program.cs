@@ -15,11 +15,15 @@ using Microsoft.Extensions.Configuration;
 using OnnxHuggingFaceWrapper.Configuration;
 using System.Text;
 using System.Reflection;
+using Microsoft.ML.OnnxRuntime;
+using Microsoft.ML.OnnxRuntime.Tensors;
 
 internal sealed class Program : IDisposable
 {
-    private readonly Model _model;
-    private readonly string _modelName;
+    private readonly Model _languageModel;
+    private readonly string _languageModelName;
+    private readonly InferenceSession _embeddingsInferenceSession;
+    private readonly InferenceSession _embeddingsTokenizerInferenceSession;
     private readonly Tokenizer _tokenizer;
     private readonly ILogger<Program> _logger;
     private readonly ExecutorWithMeasurementFactory _executorFactory;
@@ -40,10 +44,12 @@ internal sealed class Program : IDisposable
         );
 
         // Define all Routes
-        app.MapPost("/models/{modelName}", async (string _, TextGenerationRequest req)
+        app.MapPost("/models/{_}", async (string _, TextGenerationRequest req)
             => program.GenerateTextAsync(req));
         app.MapPost("/v1/chat/completions", async (ChatRequest req)
             => program.ChatCompletionAsync(req));
+        app.MapPost("/pipeline/feature-extraction/{_}", async (string _, TextEmbeddingRequest req)
+            => program.ExtractTextEmbeddingsAsync(req));
 
         // start the WebAPI
         await app.RunAsync();
@@ -54,24 +60,108 @@ internal sealed class Program : IDisposable
         _logger = logger;
         _executorFactory = executorFactory;
         _aiModelSettings = aiModelSettings;
-        // This will load `genai_config.json` get get details of the model
-        _model = new Model(aiModelSettings.Value.ModelPath);
-        _modelName = Path.GetFileNameWithoutExtension(aiModelSettings.Value.ModelPath);
-        _tokenizer = new Tokenizer(_model);
+        
+        if (!Path.Exists(aiModelSettings.Value.SmallLanguageModelPath))
+        {
+            _logger.LogError("Model file not found at {modelPath}", aiModelSettings.Value.SmallLanguageModelPath);
+            return;
+        }
 
+        // This will load `genai_config.json` get get details of the model
+        _languageModel = new Model(aiModelSettings.Value.SmallLanguageModelPath);
+        _languageModelName = Path.GetFileNameWithoutExtension(aiModelSettings.Value.SmallLanguageModelPath);
+        _tokenizer = new Tokenizer(_languageModel);
+        
+
+        if (!File.Exists(aiModelSettings.Value.TextEncoderModelPath))
+        {
+            _logger.LogError("Model file not found at {modelPath}", aiModelSettings.Value.TextEncoderModelPath);
+            return;
+        }
+
+        // Microsoft.ML.OnnxRuntimeGenAI has currently no support for embeddings, so we use the original Microsoft.ML.OnnxRuntime
+        var options = new Microsoft.ML.OnnxRuntime.SessionOptions();
+        options.RegisterOrtExtensions();
+        _embeddingsInferenceSession = new InferenceSession(aiModelSettings.Value.TextEncoderModelPath, options);
+
+        if (!File.Exists(aiModelSettings.Value.TokenizerModelPath))
+        {
+            _logger.LogError("Model file not found at {modelPath}", aiModelSettings.Value.TokenizerModelPath);
+            return;
+        }
+
+        // Load the tokenizer model
+        _embeddingsTokenizerInferenceSession = new InferenceSession(aiModelSettings.Value.TokenizerModelPath, options);
+    }
+
+    private async IAsyncEnumerable<TextEmbeddingResponse> ExtractTextEmbeddingsAsync([FromBody]TextEmbeddingRequest req)
+    {
+        foreach (var input in req.Inputs)
+        {
+            var textTokenized = TokenizeText(input);
+            var textPromptEmbeddings = TextEncoder(textTokenized).ToArray();
+
+            yield return new TextEmbeddingResponse { Embeddings = new List<ReadOnlyMemory<float>> { textPromptEmbeddings } };
+        }
+    }
+
+    public int[] TokenizeText(string text)
+    {
+        var inputTensor = new DenseTensor<string>(new string[] { text }, new int[] { 1 });
+        // check session.InputNames for the expected names of input tensors
+        var inputString = new List<NamedOnnxValue> { NamedOnnxValue.CreateFromTensor<string>("string_input", inputTensor) };
+        
+        // Run session and send the input data in to get inference output. 
+        var tokens = _embeddingsTokenizerInferenceSession.Run(inputString);
+
+        var inputIds = (tokens.ToList().First().Value as IEnumerable<long>).ToArray();
+
+        // Cast inputIds to Int32
+        var InputIdsInt = inputIds.Select(x => (int)x).ToArray();
+
+        var modelMaxLength = 77;
+        // Pad array with 49407 until length is modelMaxLength
+        if (InputIdsInt.Length < modelMaxLength)
+        {
+            var pad = Enumerable.Repeat(49407, 77 - InputIdsInt.Length).ToArray();
+            InputIdsInt = InputIdsInt.Concat(pad).ToArray();
+        }
+
+        return InputIdsInt;
+
+    }
+
+    private DenseTensor<float> TextEncoder(int[] tokenizedInput)
+    {
+        // Create input tensor.
+        var input_ids = new DenseTensor<int>(tokenizedInput, new[] { 1, tokenizedInput.Count() });
+
+        var input = new List<NamedOnnxValue> { NamedOnnxValue.CreateFromTensor<int>("input_ids", input_ids) };
+
+        // // Set CUDA EP
+        // var sessionOptions = config.GetSessionOptionsForEp();
+
+        // var encodeSession = new InferenceSession(config.TextEncoderOnnxPath, sessionOptions);
+        // Run inference.
+        var encoded = _embeddingsInferenceSession.Run(input);
+
+        var lastHiddenState = (encoded.ToList().First().Value as IEnumerable<float>).ToArray();
+        var lastHiddenStateTensor = new DenseTensor<float>(lastHiddenState.ToArray(), new[] { 1, 77, 768 });
+
+        return lastHiddenStateTensor;
     }
 
     private async IAsyncEnumerable<ChatCompletionResponse> ChatCompletionAsync([FromBody] ChatRequest request)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"<|system|>\n{_aiModelSettings.Value.SystemPrompt}<|end|>");
+        sb.AppendLine($"<|system|>\n{_aiModelSettings.Value.SmallLanguageModelSystemPrompt}<|end|>");
         request.Messages.ForEach(msg => sb.AppendLine($"<|{msg.Role}|>\n{msg.Content}<|end|>"));
         sb.AppendLine("<|assistant|>");
 
         var input = sb.ToString();
         var inputSequences = _tokenizer.Encode(input);
 
-        using var generatorParams = new GeneratorParams(_model);
+        using var generatorParams = new GeneratorParams(_languageModel);
         request.TopP.Apply(x => generatorParams.SetSearchOption("top_p", x));
         request.Temperature.Apply(x => generatorParams.SetSearchOption("temperature", x), defaultValue: 0.7f);
         request.MaxTokens.Apply(x => generatorParams.SetSearchOption("max_length", x));
@@ -92,7 +182,7 @@ internal sealed class Program : IDisposable
         if (request.Stream)
         {
             using var tokenizerStream = _tokenizer.CreateStream();
-            using var generator = new Generator(_model, generatorParams);
+            using var generator = new Generator(_languageModel, generatorParams);
             int messageCounter = 0;
             while (!generator.IsDone())
             {
@@ -104,7 +194,7 @@ internal sealed class Program : IDisposable
 
                     return new ChatCompletionResponse
                     {
-                        Model = _modelName,
+                        Model = _languageModelName,
                         Object = string.Join('\n', tokenizerStream.Decode(generator.GetSequence(0)[^1])),
                         Created = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                         Id = messageCounter++.ToString(),
@@ -118,13 +208,13 @@ internal sealed class Program : IDisposable
             Sequences outputSequences;
             using (var measurement = _executorFactory.CreateExecutor())
             {
-                outputSequences = _model.Generate(generatorParams);
+                outputSequences = _languageModel.Generate(generatorParams);
             }
 
             string[] outputs = _tokenizer.DecodeBatch(outputSequences);
             yield return new ChatCompletionResponse
             {
-                Model = _modelName,
+                Model = _languageModelName,
                 Object = string.Join('\n', outputs),
                 Created = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 Id = input.GetHashCode().ToString(),
@@ -137,13 +227,13 @@ internal sealed class Program : IDisposable
     {
         // use <|system|> for grounding prompts
         var inputs = new string[] {
-            $"<|system|>\n{_aiModelSettings.Value.SystemPrompt}<|end|>",
+            $"<|system|>\n{_aiModelSettings.Value.SmallLanguageModelSystemPrompt}<|end|>",
             $"<|user|>\n{request.Inputs}<|end|>",
             "<|assistant|>"
         };
         var inputSequences = _tokenizer.Encode(string.Join('\n', inputs));
 
-        using var generatorParams = new GeneratorParams(_model);
+        using var generatorParams = new GeneratorParams(_languageModel);
 
         request.Parameters?.TopK.Apply(x => generatorParams.SetSearchOption("top_k", x));
         request.Parameters?.TopP.Apply(x => generatorParams.SetSearchOption("top_p", x));
@@ -166,7 +256,7 @@ internal sealed class Program : IDisposable
         if (request.Stream)
         {
             using var tokenizerStream = _tokenizer.CreateStream();
-            using var generator = new Generator(_model, generatorParams);
+            using var generator = new Generator(_languageModel, generatorParams);
             while (!generator.IsDone())
             {
                 yield return await Task.Run(() =>
@@ -183,7 +273,7 @@ internal sealed class Program : IDisposable
             Sequences outputSequences;
             using (var measurement = _executorFactory.CreateExecutor())
             {
-                outputSequences = _model.Generate(generatorParams);
+                outputSequences = _languageModel.Generate(generatorParams);
             }
 
             string[] outputs = _tokenizer.DecodeBatch(outputSequences);
@@ -229,7 +319,7 @@ internal sealed class Program : IDisposable
 
     public void Dispose()
     {
-        _model?.Dispose();
+        _languageModel?.Dispose();
         _tokenizer?.Dispose();
         _logger?.LogInformation("Exiting ...");
     }

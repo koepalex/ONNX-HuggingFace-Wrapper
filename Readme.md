@@ -11,20 +11,26 @@ The solution is designed for offline development and testing of applications tha
 * HuggingFace TextGenerationAPI: An API for generating text using HuggingFace's transformers. More details can be found [here](https://huggingface.co/docs/text-generation-inference/basic_tutorials/consuming_tgi).
 * SemanticKernel: A tool for semantic search and text similarity. More details can be found [here](https://github.com/microsoft/semantic-kernel).
 
-## Usage
+## Preparations
 
 * Clone this repository
-* Clone the repository with the model you would like to us
+* Download the language model you would like to use
   * Check that GIT LFS was installed and active ahead of cloning the model repository
   * e.g. `git clone https://huggingface.co/microsoft/Phi-3-mini-4k-instruct`
+* Download the text encoding model you would like to use
+  * e.g. `git clone https://huggingface.co/CompVis/stable-diffusion-v1-4 -b onnx`
+* Download the tokenizer model you would like to use
+  * e.g. `curl -# -O -L https://github.com/cassiebreviu/StableDiffusion/raw/main/StableDiffusion.ML.OnnxRuntime/cliptokenizer.onnx`
 * Edit [appsettings.json](appsettings.json) with 
-  * Fullpath to the folder with the Onnx model you want to use
-  * System prompt to be used by the application
+  * `SmallLanguageModelPath` - full path to the folder with the Onnx model you want to use
+  * `SmallLanguageModelSystemPrompt` - system prompt to be used by the application
+  * `TextEncoderModelPath` - full path to the Onnx model file for text encoding
+  * `TokenizerModelPath` - full path to the Onnx model file for tokenizing
 * Run it, either
   * `dotnet run -c Release onnx-huggingfaces-wrapper.sln`
   * or in visual studio code _Run and Debug_ view (`Ctrl + Shift + D`) the `.NET Core Launch (web) - Production`
 
-## Testing
+## Usage
 
 ### TextGeneration
 
@@ -56,6 +62,15 @@ curl https://localhost:5001/v1/chat/completions `
       -d '{"messages": [{"content": "How to explain Internet for a medieval knight?", "role": "user"}], "temperature":0.7, "stream":true}' `
       -H 'Content-Type: application/json' `
       -k
+```
+
+### Embeddings
+```pwsh
+curl https://localhost:5001/pipeline/feature-extraction/stable-diffusion `
+     -X POST `
+     -d '{"inputs": ["How to explain Internet for a medieval knight?"]}' `
+     -H 'Content-Type: application/json' `
+     -k
 ```
 
 ## Know Limitations
