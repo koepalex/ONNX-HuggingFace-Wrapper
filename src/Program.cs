@@ -221,15 +221,15 @@ public sealed class Program : IDisposable
                 Created = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
                 Id = $"id-{input.GetHashCode()}",
                 SystemFingerprint = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "1.0.0", // use as fingerprint the version of the assembly
-                Choices = new List<ChatCompletionResponse.Choice> { 
-                    new ChatCompletionResponse.Choice { 
+                Choices = new List<ChatCompletionComplete> { 
+                    new ChatCompletionComplete { 
                         FinishReason = "completed",
-                        Message = new ChatCompletionResponse.Message { 
+                        Message = new Message { 
                             Content = string.Join('\n', outputs), 
                             Role = "assistant", 
                     },
                     Index = 0 } },
-                Usage = new ChatCompletionResponse.CompletionUsage {
+                Usage = new Usage {
                     CompletionTokens = outputs.Length,
                     TotalTokens = outputs.Length,
                     PromptTokens = input.Length,
