@@ -4,7 +4,6 @@ using System.Threading.Tasks;
 using NUnit.Framework;
 using FluentAssertions;
 using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.TextGeneration;
 using Microsoft.SemanticKernel.Connectors.HuggingFace;
 using Microsoft.SemanticKernel.ChatCompletion;
 

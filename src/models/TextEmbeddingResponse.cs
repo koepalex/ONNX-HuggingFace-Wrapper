@@ -1,11 +1,22 @@
 namespace OnnxHuggingFaceWrapper.Models;
 
-using System.Text.Json.Serialization;
-
 //see https://huggingface.github.io/text-embeddings-inference/#/Text%20Embeddings%20Inference/embed
 
-internal sealed class TextEmbeddingResponse
+internal sealed class TextEmbeddingResponse : List<List<List<ReadOnlyMemory<float>>>>
 {
-    [JsonPropertyName("embeddings")]
-    public IList<ReadOnlyMemory<float>> Embeddings { get; set; } = [];
+    public static TextEmbeddingResponse Create()
+    {
+        return new TextEmbeddingResponse
+        {
+            new List<List<ReadOnlyMemory<float>>>
+            {
+                new List<ReadOnlyMemory<float>>()
+            }
+        };
+    }
+
+    public void Add(ReadOnlyMemory<float> embedding)
+    {
+        this[0][0].Add(embedding);
+    }
 }

@@ -49,7 +49,7 @@ public sealed class Program : IDisposable
         app.MapPost("/v1/chat/completions", async (ChatRequest req)
             => await program.ChatCompletionAsync(req));
         app.MapPost("/pipeline/feature-extraction/{_}", async (string _, TextEmbeddingRequest req)
-            => program.ExtractTextEmbeddingsAsync(req));
+            => program.ExtractTextEmbeddings(req));
 
         // start the WebAPI
         await app.RunAsync();
@@ -94,18 +94,20 @@ public sealed class Program : IDisposable
         _embeddingsTokenizerInferenceSession = new InferenceSession(aiModelSettings.Value.TokenizerModelPath, options);
     }
 
-    private async IAsyncEnumerable<TextEmbeddingResponse> ExtractTextEmbeddingsAsync([FromBody]TextEmbeddingRequest req)
+    private TextEmbeddingResponse ExtractTextEmbeddings([FromBody]TextEmbeddingRequest req)
     {
+        var result = TextEmbeddingResponse.Create();
         foreach (var input in req.Inputs)
         {
             var textTokenized = TokenizeText(input);
             var textPromptEmbeddings = TextEncoder(textTokenized).ToArray();
 
-            yield return new TextEmbeddingResponse { Embeddings = new List<ReadOnlyMemory<float>> { textPromptEmbeddings } };
+            result.Add(textPromptEmbeddings);
         }
+        return result;
     }
 
-    public int[] TokenizeText(string text)
+    private int[] TokenizeText(string text)
     {
         var inputTensor = new DenseTensor<string>(new string[] { text }, new int[] { 1 });
         // check session.InputNames for the expected names of input tensors
